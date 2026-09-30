@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-ink: #17211b;
   --color-leaf: #215c3d;
@@ -9,9 +11,11 @@
   --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
 }
 
-:root { font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif; color: #17211b; background: #f7f8f5; font-synthesis: none; }
+:root { font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif; color: var(--color-ink); background: var(--color-paper); font-synthesis: none; }
+html { color-scheme: light; }
+html.dark { color-scheme: dark; --color-ink: #e8eee9; --color-paper: #111813; --color-leaf-light: #263a2e; }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; }
+body { margin: 0; min-width: 320px; min-height: 100vh; color: var(--color-ink); background: var(--color-paper); transition: background-color .2s ease, color .2s ease; }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
 ::selection { background: #d9efdf; color: #17452d; }
@@ -33,6 +37,19 @@ button { cursor: pointer; }
 @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .input-field { width: 100%; border: 1px solid #dce2da; border-radius: 12px; padding: 11px 13px; color: #17211b; background: #fff; outline: none; transition: border .16s, box-shadow .16s; }
 .input-field:focus { border-color: #4c8b62; box-shadow: 0 0 0 3px rgba(76,139,98,.13); }
+.dark .topbar { background: rgba(17,24,19,.92); border-color: #2a352d; }
+.dark .bg-white { background-color: #1b241e; }
+.dark .text-stone-400 { color: #a1ada4; }
+.dark .text-stone-500 { color: #b2bdb4; }
+.dark .text-stone-600 { color: #c3cdc5; }
+.dark .divide-y > :not(:last-child) { border-color: #303b33; }
+.dark .item-done .item-name { color: #929d94; text-decoration-color: #929d94; }
+.dark .check-control { border-color: #536156; background: #131a16; }
+.dark .check-control:checked { border-color: #398255; background: #398255; }
+.dark .input-field { border-color: #38453c; color: #e8eee9; background: #131a16; }
+.dark .input-field::placeholder { color: #829087; }
+.dark .input-field:focus { border-color: #69a77b; box-shadow: 0 0 0 3px rgba(105,167,123,.2); }
+.dark select option { color: #e8eee9; background: #1b241e; }
 .toast { position: fixed; z-index: 70; bottom: 22px; left: 50%; transform: translateX(-50%); border-radius: 99px; background: #17211b; color: #fff; padding: 11px 17px; box-shadow: 0 10px 32px #12201930; animation: enter .18s ease-out; white-space: nowrap; }
 @media (max-width: 760px) {
   .layout { grid-template-columns: minmax(0,1fr); gap: 22px; padding: 24px 18px 48px; }
