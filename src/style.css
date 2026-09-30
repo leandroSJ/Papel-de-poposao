@@ -21,7 +21,7 @@ button { cursor: pointer; }
 ::selection { background: #d9efdf; color: #17452d; }
 
 .app-shell { min-height: 100vh; }
-.topbar { position: sticky; top: 0; z-index: 20; backdrop-filter: blur(16px); background: rgba(247,248,245,.9); border-bottom: 1px solid #e8ebe5; }
+.topbar { position: sticky; top: 0; padding-top: env(safe-area-inset-top, 0px); z-index: 20; backdrop-filter: blur(16px); background: rgba(247,248,245,.9); border-bottom: 1px solid #e8ebe5; }
 .layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 34px; max-width: 1240px; margin: 0 auto; padding: 34px 28px 70px; }
 .sidebar { position: sticky; top: 106px; align-self: start; }
 .category-button { transition: background .18s, color .18s, transform .18s; }
