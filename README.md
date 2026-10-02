@@ -10,7 +10,7 @@ Uma lista de compras responsiva, feita com Vite e Tailwind CSS. Organize os prod
 - Marcar itens comprados com checkbox e acompanhar o progresso.
 - Total estimado e valor pendente atualizados automaticamente.
 - Busca por nome e filtros por categoria.
-- Dados salvos no `localStorage` e sincronização opcional entre aparelhos com conta Supabase.
+- Dados salvos no aparelho e sincronização entre computador e celular com a mesma conta Google da fila de atendimento (Firebase).
 - Layout responsivo para celular, tablet e desktop.
 
 ## Executar localmente
@@ -31,4 +31,4 @@ npm run preview
 
 O workflow em `.github/workflows/deploy.yml` compila e publica o site automaticamente a cada push na branch `main`. No GitHub, abra **Settings → Pages** e selecione **GitHub Actions** como origem.
 
-Para ativar sincronização entre aparelhos, siga [`SETUP-SYNC.md`](SETUP-SYNC.md). Sem configurar o Supabase, a lista continua salva somente neste aparelho.
+Para ativar a sincronização entre aparelhos, publique a regra do Firestore descrita em [`SETUP-SYNC.md`](SETUP-SYNC.md). A lista continua salva neste aparelho enquanto isso.

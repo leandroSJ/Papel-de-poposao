@@ -1,5 +1,7 @@
 import './style.css';
-import { cloudConfigured, supabase } from './supabase.js';
+import { auth, db } from './firebase.js';
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { doc, getDoc, onSnapshot, serverTimestamp, setDoc } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const categories = [
   { id: 'all', label: 'Todos os itens', icon: '▦', tint: 'bg-stone-100 text-stone-600' },
@@ -20,12 +22,11 @@ const seed = [
 const stored = localStorage.getItem('grana-shopping-items');
 let items = stored ? JSON.parse(stored) : seed;
 let cloudUser = null;
-let cloudChannel = null;
+let cloudUnsubscribe = null;
 let cloudSaveTimer = null;
 let connectingUserId = null;
 let applyingCloudData = false;
-let syncState = cloudConfigured ? 'disconnected' : 'not-configured';
-let authMode = 'login';
+let syncState = 'disconnected';
 let selectedCategory = 'all';
 let searchQuery = '';
 let modalItemId = null;
@@ -51,12 +52,9 @@ function queueCloudSave() {
   cloudSaveTimer = setTimeout(async () => {
     if (!cloudUser) return;
     const snapshot = structuredClone(items);
-    const { error } = await supabase.from('shopping_lists').upsert({
-      user_id: cloudUser.id,
-      items: snapshot,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'user_id' });
-    if (error) {
+    try {
+      await setDoc(doc(db, 'shoppingLists', cloudUser.uid), { items: snapshot, updatedAt: serverTimestamp() });
+    } catch {
       syncState = 'error';
       render();
       showToast('Salva neste aparelho; não foi possível sincronizar agora.');
@@ -75,27 +73,20 @@ function applyCloudItems(nextItems) {
   render();
 }
 function subscribeToCloud() {
-  if (cloudChannel) supabase.removeChannel(cloudChannel);
-  cloudChannel = supabase.channel(`shopping-list-${cloudUser.id}`)
-    .on('postgres_changes', {
-      event: 'UPDATE', schema: 'public', table: 'shopping_lists',
-      filter: `user_id=eq.${cloudUser.id}`,
-    }, payload => {
-      const incoming = payload.new?.items;
+  if (cloudUnsubscribe) cloudUnsubscribe();
+  cloudUnsubscribe = onSnapshot(doc(db, 'shoppingLists', cloudUser.uid), snapshot => {
+      const incoming = snapshot.data()?.items;
       if (Array.isArray(incoming) && JSON.stringify(incoming) !== JSON.stringify(items)) {
         applyCloudItems(incoming);
         showToast('Lista atualizada pelo outro aparelho.');
       }
-    })
-    .subscribe();
+    }, () => {
+      syncState = 'error';
+      render();
+    });
 }
 async function writeCloudItems(nextItems) {
-  const { error } = await supabase.from('shopping_lists').upsert({
-    user_id: cloudUser.id,
-    items: nextItems,
-    updated_at: new Date().toISOString(),
-  }, { onConflict: 'user_id' });
-  if (error) throw error;
+  await setDoc(doc(db, 'shoppingLists', cloudUser.uid), { items: nextItems, updatedAt: serverTimestamp() });
   syncState = 'synced';
   subscribeToCloud();
   render();
@@ -113,14 +104,16 @@ function mergeLists(cloudItems, localItems) {
   return merged;
 }
 async function connectCloudUser(user) {
-  if (!user || cloudUser?.id === user.id && (cloudChannel || connectingUserId === user.id)) return;
+  if (!user || cloudUser?.uid === user.uid && (cloudUnsubscribe || connectingUserId === user.uid)) return;
   cloudUser = user;
-  connectingUserId = user.id;
+  connectingUserId = user.uid;
   syncState = 'loading';
   render();
-  const { data: remote, error } = await supabase.from('shopping_lists')
-    .select('items').eq('user_id', user.id).maybeSingle();
-  if (error) {
+  let remote;
+  try {
+    const snapshot = await getDoc(doc(db, 'shoppingLists', user.uid));
+    remote = snapshot.exists() ? snapshot.data() : null;
+  } catch {
     connectingUserId = null;
     syncState = 'error';
     render();
@@ -152,17 +145,13 @@ async function connectCloudUser(user) {
   showToast('Lista sincronizada.');
 }
 function initializeCloudAuth() {
-  if (!cloudConfigured) return;
-  supabase.auth.getSession().then(({ data }) => {
-    if (data.session?.user) connectCloudUser(data.session.user);
-  });
-  supabase.auth.onAuthStateChange((_event, session) => {
-    if (session?.user) {
-      setTimeout(() => connectCloudUser(session.user), 0);
+  onAuthStateChanged(auth, user => {
+    if (user) {
+      setTimeout(() => connectCloudUser(user), 0);
     } else if (cloudUser) {
-      if (cloudChannel) supabase.removeChannel(cloudChannel);
+      if (cloudUnsubscribe) cloudUnsubscribe();
       cloudUser = null;
-      cloudChannel = null;
+      cloudUnsubscribe = null;
       syncState = 'disconnected';
       render();
     }
@@ -179,10 +168,10 @@ function render() {
   const totals = getTotals();
   const visible = visibleItems();
   const categoryCount = category => category === 'all' ? items.length : items.filter(item => item.category === category).length;
-  const syncLabel = !cloudConfigured ? 'Configurar nuvem' : cloudUser ? (syncState === 'saving' ? 'Salvando...' : syncState === 'error' ? 'Falha ao sincronizar' : 'Conta conectada') : 'Sincronizar';
+  const syncLabel = cloudUser ? (syncState === 'saving' ? 'Salvando...' : syncState === 'error' ? 'Falha ao sincronizar' : 'Conta conectada') : 'Entrar com Google';
   const syncDescription = cloudUser
     ? syncState === 'error' ? 'Sem conexão com a nuvem; suas alterações continuam salvas neste aparelho.' : 'Sua lista está vinculada à sua conta e sincroniza com outros aparelhos.'
-    : 'Sua lista fica salva neste aparelho até conectar uma conta.';
+    : 'Entre com a mesma conta Google da fila para sincronizar entre aparelhos.';
   app.innerHTML = `
     <div class="app-shell bg-paper text-ink transition-colors duration-200">
       <header class="topbar dark:bg-[#111813]/90 dark:border-[#29352d]">
@@ -243,30 +232,23 @@ function render() {
 }
 function showAccountModal() {
   const root = document.querySelector('#modal-root');
-  if (!cloudConfigured) {
-    root.innerHTML = `<div class="modal-backdrop" data-account-backdrop><section class="modal-card rounded-[22px] bg-white p-5 shadow-2xl sm:p-6 dark:bg-[#1b241e]" role="dialog" aria-modal="true" aria-labelledby="account-title"><div class="mb-4 flex items-start justify-between"><div><span class="mb-2 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#eaf2e9] text-leaf dark:bg-[#263a2e] dark:text-[#a8d1b2]">${icon('cloud', 18)}</span><h2 id="account-title" class="text-[20px] font-extrabold">Sincronização na nuvem</h2></div><button data-account-close class="grid h-9 w-9 place-items-center rounded-xl text-stone-400 hover:bg-stone-100 dark:hover:bg-[#2a352d]" aria-label="Fechar">${icon('close', 18)}</button></div><p class="text-[13px] leading-relaxed text-stone-500">Para ativar, crie um projeto Supabase, execute o SQL e configure a URL e a chave pública nas variáveis do GitHub Actions. Até concluir essa configuração, a lista continua salva neste aparelho.</p><a class="mt-5 inline-flex rounded-xl bg-leaf px-4 py-3 text-[12px] font-bold text-white no-underline" href="https://github.com/leandroSJ/Papel-de-poposao/blob/main/SETUP-SYNC.md" target="_blank" rel="noreferrer">Ver instruções</a></section></div>`;
-    bindAccountModalClose(root);
-    return;
-  }
   if (cloudUser) {
     root.innerHTML = `<div class="modal-backdrop" data-account-backdrop><section class="modal-card rounded-[22px] bg-white p-5 shadow-2xl sm:p-6 dark:bg-[#1b241e]" role="dialog" aria-modal="true" aria-labelledby="account-title"><div class="mb-4 flex items-start justify-between"><div><span class="mb-2 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#eaf2e9] text-leaf dark:bg-[#263a2e] dark:text-[#a8d1b2]">${icon('cloud', 18)}</span><h2 id="account-title" class="text-[20px] font-extrabold">Conta conectada</h2></div><button data-account-close class="grid h-9 w-9 place-items-center rounded-xl text-stone-400 hover:bg-stone-100 dark:hover:bg-[#2a352d]" aria-label="Fechar">${icon('close', 18)}</button></div><p class="text-[13px] text-stone-500">${escapeHtml(cloudUser.email || '')}</p><p class="mt-1 text-[11px] text-stone-400">${syncState === 'error' ? 'A nuvem não respondeu. A lista continua salva neste aparelho.' : 'Use esta conta no computador e no celular para acessar a mesma lista.'}</p><div class="mt-5 flex gap-2"><button id="sync-retry" class="flex-1 rounded-xl bg-leaf px-3 py-3 text-[11px] font-bold text-white">Sincronizar agora</button><button id="sign-out" class="flex-1 rounded-xl border border-[#dce5dc] px-3 py-3 text-[11px] font-bold text-ink dark:border-[#38453c]">Sair neste aparelho</button></div></section></div>`;
     bindAccountModalClose(root);
     root.querySelector('#sync-retry').addEventListener('click', () => {
       root.innerHTML = '';
-      if (cloudChannel) supabase.removeChannel(cloudChannel);
-      cloudChannel = null;
+      if (cloudUnsubscribe) cloudUnsubscribe();
+      cloudUnsubscribe = null;
       connectingUserId = null;
       connectCloudUser(cloudUser);
     });
     root.querySelector('#sign-out').addEventListener('click', async () => {
-      const { error } = await supabase.auth.signOut();
-      if (error) { showToast('Não consegui sair da conta.'); return; }
+      try { await signOut(auth); } catch { showToast('Não consegui sair da conta.'); return; }
       root.innerHTML = '';
       showToast('Conta desconectada neste aparelho.');
     });
     return;
   }
-  authMode = 'login';
   renderAuthModal();
 }
 function bindAccountModalClose(root) {
@@ -277,39 +259,27 @@ function bindAccountModalClose(root) {
 }
 function renderAuthModal(message = '') {
   const root = document.querySelector('#modal-root');
-  const isLogin = authMode === 'login';
-  root.innerHTML = `<div class="modal-backdrop" data-account-backdrop><section class="modal-card rounded-[22px] bg-white p-5 shadow-2xl sm:p-6 dark:bg-[#1b241e]" role="dialog" aria-modal="true" aria-labelledby="account-title"><div class="mb-4 flex items-start justify-between"><div><span class="mb-2 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#eaf2e9] text-leaf dark:bg-[#263a2e] dark:text-[#a8d1b2]">${icon('cloud', 18)}</span><h2 id="account-title" class="text-[20px] font-extrabold">${isLogin ? 'Entrar para sincronizar' : 'Criar conta'}</h2><p class="mt-1 text-[12px] text-stone-400">Use a mesma conta no computador e no celular.</p></div><button data-account-close class="grid h-9 w-9 place-items-center rounded-xl text-stone-400 hover:bg-stone-100 dark:hover:bg-[#2a352d]" aria-label="Fechar">${icon('close', 18)}</button></div><form id="auth-form" class="space-y-3"><label class="block"><span class="mb-1.5 block text-[11px] font-bold text-stone-600">E-mail</span><input class="input-field" type="email" name="email" autocomplete="email" required placeholder="voce@exemplo.com" /></label><label class="block"><span class="mb-1.5 block text-[11px] font-bold text-stone-600">Senha</span><input class="input-field" type="password" name="password" autocomplete="${isLogin ? 'current-password' : 'new-password'}" minlength="6" required placeholder="Mínimo de 6 caracteres" /></label><p id="auth-message" class="min-h-4 text-[11px] text-stone-500">${escapeHtml(message)}</p><button class="w-full rounded-xl bg-leaf px-4 py-3 text-[12px] font-bold text-white">${isLogin ? 'Entrar' : 'Criar conta'}</button></form><button id="auth-mode-toggle" class="mt-4 w-full text-[11px] font-semibold text-leaf">${isLogin ? 'Ainda não tenho conta — criar agora' : 'Já tenho conta — entrar'}</button></section></div>`;
+  root.innerHTML = `<div class="modal-backdrop" data-account-backdrop><section class="modal-card rounded-[22px] bg-white p-5 shadow-2xl sm:p-6 dark:bg-[#1b241e]" role="dialog" aria-modal="true" aria-labelledby="account-title"><div class="mb-4 flex items-start justify-between"><div><span class="mb-2 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#eaf2e9] text-leaf dark:bg-[#263a2e] dark:text-[#a8d1b2]">${icon('cloud', 18)}</span><h2 id="account-title" class="text-[20px] font-extrabold">Entrar para sincronizar</h2><p class="mt-1 text-[12px] text-stone-400">Use a mesma conta Google da fila de atendimento.</p></div><button data-account-close class="grid h-9 w-9 place-items-center rounded-xl text-stone-400 hover:bg-stone-100 dark:hover:bg-[#2a352d]" aria-label="Fechar">${icon('close', 18)}</button></div><p id="auth-message" class="mb-3 min-h-4 text-[11px] text-stone-500">${escapeHtml(message)}</p><button id="google-login" class="flex w-full items-center justify-center gap-3 rounded-xl bg-leaf px-4 py-3 text-[12px] font-bold text-white"><span class="grid h-5 w-5 place-items-center rounded-full bg-white text-[13px] font-extrabold text-[#4285f4]">G</span> Continuar com Google</button><p class="mt-3 text-[10px] leading-relaxed text-stone-400">A lista será salva na sua conta Google e ficará disponível neste celular e computador.</p></section></div>`;
   bindAccountModalClose(root);
-  root.querySelector('#auth-mode-toggle').addEventListener('click', () => {
-    authMode = isLogin ? 'signup' : 'login';
-    renderAuthModal();
-  });
-  root.querySelector('#auth-form').addEventListener('submit', async event => {
-    event.preventDefault();
-    const submit = event.currentTarget.querySelector('button[type="submit"], button:not([type])');
-    submit.disabled = true;
-    submit.textContent = 'Aguarde...';
-    const form = new FormData(event.currentTarget);
-    const email = form.get('email').trim();
-    const password = form.get('password');
-    const result = isLogin
-      ? await supabase.auth.signInWithPassword({ email, password })
-      : await supabase.auth.signUp({ email, password, options: { emailRedirectTo: `${window.location.origin}${window.location.pathname}` } });
-    if (result.error) {
-      const friendly = result.error.message.toLowerCase().includes('invalid login') ? 'E-mail ou senha não conferem.' : result.error.message;
-      renderAuthModal(friendly);
-      return;
-    }
-    if (isLogin) {
-      root.innerHTML = '';
-      if (result.data.user) connectCloudUser(result.data.user);
-      return;
-    }
-    if (result.data.session?.user) {
-      root.innerHTML = '';
-      connectCloudUser(result.data.session.user);
-    } else {
-      renderAuthModal('Conta criada. Confira seu e-mail para confirmar o cadastro e depois entre aqui.');
+  root.querySelector('#google-login').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = 'Conectando...';
+    try {
+      const provider = new GoogleAuthProvider();
+      if (window.matchMedia('(max-width: 767px)').matches) {
+        await signInWithRedirect(auth, provider);
+      } else {
+        await signInWithPopup(auth, provider);
+        root.innerHTML = '';
+      }
+    } catch (error) {
+      const message = error.code === 'auth/unauthorized-domain'
+        ? 'Este endereço precisa ser autorizado em Firebase > Authentication > Settings > Authorized domains.'
+        : error.code === 'auth/operation-not-allowed'
+          ? 'Ative o provedor Google em Firebase > Authentication > Sign-in method.'
+          : 'Não foi possível entrar com Google. Tente novamente.';
+      renderAuthModal(message);
     }
   });
 }
@@ -318,7 +288,7 @@ function showSyncConflict(remoteItems, localItems) {
   root.innerHTML = `<div class="modal-backdrop"><section class="modal-card rounded-[22px] bg-white p-5 shadow-2xl sm:p-6 dark:bg-[#1b241e]" role="dialog" aria-modal="true" aria-labelledby="sync-conflict-title"><span class="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#eaf2e9] text-leaf dark:bg-[#263a2e] dark:text-[#a8d1b2]">${icon('cloud', 18)}</span><h2 id="sync-conflict-title" class="text-[20px] font-extrabold tracking-[-.04em]">Escolha qual lista usar</h2><p class="mt-2 text-[13px] leading-relaxed text-stone-500">Há uma lista salva neste aparelho e outra na nuvem. Você pode escolher uma ou mesclar os itens. Nenhuma será substituída sem sua escolha.</p><div class="mt-5 grid gap-2"><button data-sync-choice="cloud" class="rounded-xl bg-leaf px-4 py-3 text-left text-[12px] font-bold text-white">Usar a lista da nuvem</button><button data-sync-choice="device" class="rounded-xl border border-[#dce5dc] px-4 py-3 text-left text-[12px] font-bold text-ink dark:border-[#38453c]">Usar a lista deste aparelho</button><button data-sync-choice="merge" class="rounded-xl border border-[#dce5dc] px-4 py-3 text-left text-[12px] font-bold text-ink dark:border-[#38453c]">Mesclar as duas listas</button></div><p class="mt-3 text-[10px] leading-relaxed text-stone-400">Na mesclagem, itens com o mesmo nome, categoria e unidade aparecem uma vez; em caso de diferença, os dados da nuvem são mantidos.</p></section></div>`;
   root.querySelectorAll('[data-sync-choice]').forEach(button => button.addEventListener('click', async () => {
     const choice = button.dataset.syncChoice;
-    localStorage.setItem(`grana-list-backup-${cloudUser.id}-${Date.now()}`, JSON.stringify(localItems));
+    localStorage.setItem(`grana-list-backup-${cloudUser.uid}-${Date.now()}`, JSON.stringify(localItems));
     root.innerHTML = '';
     if (choice === 'cloud') {
       applyCloudItems(remoteItems);
@@ -378,8 +348,8 @@ render();
 initializeCloudAuth();
 window.addEventListener('online', () => {
   if (!cloudUser) return;
-  if (cloudChannel) supabase.removeChannel(cloudChannel);
-  cloudChannel = null;
+  if (cloudUnsubscribe) cloudUnsubscribe();
+  cloudUnsubscribe = null;
   connectingUserId = null;
   connectCloudUser(cloudUser);
 });
