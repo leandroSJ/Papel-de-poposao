@@ -8,6 +8,8 @@ const categories = [
   { id: 'Café da manhã', label: 'Café da manhã', icon: '☕', tint: 'bg-amber-100 text-amber-700' },
   { id: 'Almoço', label: 'Almoço', icon: '🍲', tint: 'bg-orange-100 text-orange-700' },
   { id: 'Material de limpeza', label: 'Material de limpeza', icon: '🧽', tint: 'bg-sky-100 text-sky-700' },
+  { id: 'Higiene', label: 'Higiene', icon: '🧴', tint: 'bg-cyan-100 text-cyan-700' },
+  { id: 'Proteína', label: 'Proteína', icon: '🍗', tint: 'bg-rose-100 text-rose-700' },
   { id: 'Hortifruti', label: 'Hortifruti', icon: '🥑', tint: 'bg-lime-100 text-lime-700' },
   { id: 'Outros', label: 'Outros', icon: '✳', tint: 'bg-violet-100 text-violet-700' },
 ];
