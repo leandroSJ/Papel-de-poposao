@@ -440,6 +440,8 @@ function renderAuthModal(message = '') {
     button.textContent = 'Conectando...';
     try {
       const provider = new GoogleAuthProvider();
+      // Sempre permite escolher outra conta Google no dispositivo convidado.
+      provider.setCustomParameters({ prompt: 'select_account' });
       await setPersistence(auth, browserLocalPersistence);
       if (window.matchMedia('(max-width: 767px)').matches) {
         await signInWithRedirect(auth, provider);
@@ -452,7 +454,7 @@ function renderAuthModal(message = '') {
         ? 'Este endereço precisa ser autorizado em Firebase > Authentication > Settings > Authorized domains.'
         : error.code === 'auth/operation-not-allowed'
           ? 'Ative o provedor Google em Firebase > Authentication > Sign-in method.'
-          : 'Não foi possível entrar com Google. Tente novamente.';
+          : `Não foi possível entrar com Google (${error.code || 'erro desconhecido'}). Tente novamente.`;
       renderAuthModal(message);
     }
   });
