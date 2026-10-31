@@ -49,7 +49,8 @@ match /sharedShoppingLists/{listId} {
     )
     ||
     (
-      request.resource.data.joinProof == resource.data.inviteToken
+      !(request.auth.uid in resource.data.members)
+      && request.resource.data.joinProof == resource.data.inviteToken
       && request.resource.data.members.size() == resource.data.members.size() + 1
       && request.resource.data.members.hasAll(resource.data.members)
       && request.resource.data.members.hasAny([request.auth.uid])
