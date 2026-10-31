@@ -13,8 +13,17 @@ O arquivo de regras no GitHub é uma referência. Para aplicar as permissões no
 
 1. Abra o projeto `filaarius` no [Firebase Console](https://console.firebase.google.com/).
 2. Entre em **Firestore Database → Rules**.
-3. Dentro de `match /databases/{database}/documents { ... }`, mantenha as funções e regras que já existem para o TechQueue e acrescente os dois blocos abaixo.
-4. Clique em **Publish**.
+3. Dentro de `match /databases/{database}/documents { ... }`, mantenha as funções e regras que já existem para o TechQueue. Acrescente também esta função, no mesmo escopo das demais funções:
+
+```text
+function isGoogleUser() {
+  return request.auth != null
+    && request.auth.token.firebase.sign_in_provider == 'google.com';
+}
+```
+
+4. Acrescente os dois blocos abaixo, sem apagar as regras existentes.
+5. Clique em **Publish**.
 
 A regra antiga da lista pessoal deve ser mantida:
 
@@ -29,16 +38,16 @@ Acrescente também a regra da lista compartilhada:
 
 ```text
 match /sharedShoppingLists/{listId} {
-  allow read: if activeGoogleUser()
+  allow read: if isGoogleUser()
     && request.auth.uid in resource.data.members;
 
-  allow create: if activeGoogleUser()
+  allow create: if isGoogleUser()
     && request.resource.data.ownerUid == request.auth.uid
     && request.resource.data.members == [request.auth.uid]
     && request.resource.data.inviteToken is string
     && request.resource.data.items is list;
 
-  allow update: if activeGoogleUser() && (
+  allow update: if isGoogleUser() && (
     (
       request.auth.uid in resource.data.members
       && request.resource.data.members == resource.data.members
@@ -65,7 +74,7 @@ match /sharedShoppingLists/{listId} {
 }
 ```
 
-A função `activeGoogleUser()` já existe nas regras atuais do TechQueue. Não a remova nem substitua. Ela continua sendo aplicada tanto às listas pessoais quanto às compartilhadas.
+A função `activeGoogleUser()` continua sendo usada pela lista pessoal e pelas regras existentes do TechQueue. Não a remova nem substitua. A lista compartilhada usa `isGoogleUser()` para aceitar participantes autenticados com suas próprias contas Google. Isso não libera leitura pública: cada participante ainda precisa estar em `members`.
 
 ## Como compartilhar
 
