@@ -1,7 +1,7 @@
 import './style.css';
 import { auth, db } from './firebase.js';
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
-import { doc, getDoc, onSnapshot, serverTimestamp, setDoc } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+import { arrayUnion, deleteField, doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const categories = [
   { id: 'all', label: 'Todos os itens', icon: '▦', tint: 'bg-stone-100 text-stone-600' },
@@ -29,6 +29,8 @@ let cloudSaveTimer = null;
 let connectingUserId = null;
 let applyingCloudData = false;
 let syncState = 'disconnected';
+let sharedListId = localStorage.getItem('grana-shared-list-id') || null;
+const inviteParams = new URLSearchParams(window.location.search);
 let selectedCategory = 'all';
 let searchQuery = '';
 let modalItemId = null;
@@ -43,6 +45,11 @@ const icon = (name, size = 18) => {
   };
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
 };
+function getActiveListRef() {
+  return sharedListId
+    ? doc(db, 'sharedShoppingLists', sharedListId)
+    : doc(db, 'shoppingLists', cloudUser.uid);
+}
 function saveLocal() { localStorage.setItem('grana-shopping-items', JSON.stringify(items)); }
 function save() {
   saveLocal();
@@ -55,7 +62,11 @@ function queueCloudSave() {
     if (!cloudUser) return;
     const snapshot = structuredClone(items);
     try {
-      await setDoc(doc(db, 'shoppingLists', cloudUser.uid), { items: snapshot, updatedAt: serverTimestamp() });
+      if (sharedListId) {
+        await updateDoc(getActiveListRef(), { items: snapshot, updatedAt: serverTimestamp() });
+      } else {
+        await setDoc(getActiveListRef(), { items: snapshot, updatedAt: serverTimestamp() });
+      }
     } catch {
       syncState = 'error';
       render();
@@ -76,7 +87,7 @@ function applyCloudItems(nextItems) {
 }
 function subscribeToCloud() {
   if (cloudUnsubscribe) cloudUnsubscribe();
-  cloudUnsubscribe = onSnapshot(doc(db, 'shoppingLists', cloudUser.uid), snapshot => {
+  cloudUnsubscribe = onSnapshot(getActiveListRef(), snapshot => {
       const incoming = snapshot.data()?.items;
       if (Array.isArray(incoming) && JSON.stringify(incoming) !== JSON.stringify(items)) {
         applyCloudItems(incoming);
@@ -88,7 +99,11 @@ function subscribeToCloud() {
     });
 }
 async function writeCloudItems(nextItems) {
-  await setDoc(doc(db, 'shoppingLists', cloudUser.uid), { items: nextItems, updatedAt: serverTimestamp() });
+  if (sharedListId) {
+    await updateDoc(getActiveListRef(), { items: nextItems, updatedAt: serverTimestamp() });
+  } else {
+    await setDoc(getActiveListRef(), { items: nextItems, updatedAt: serverTimestamp() });
+  }
   syncState = 'synced';
   subscribeToCloud();
   render();
@@ -111,18 +126,53 @@ async function connectCloudUser(user) {
   connectingUserId = user.uid;
   syncState = 'loading';
   render();
+
+  const inviteListId = inviteParams.get('join');
+  const inviteToken = inviteParams.get('token');
+  if (inviteListId && inviteToken) {
+    try {
+      const inviteRef = doc(db, 'sharedShoppingLists', inviteListId);
+      await updateDoc(inviteRef, { members: arrayUnion(user.uid), joinProof: inviteToken });
+      await updateDoc(inviteRef, { joinProof: deleteField() });
+      sharedListId = inviteListId;
+      localStorage.setItem('grana-shared-list-id', sharedListId);
+      inviteParams.delete('join');
+      inviteParams.delete('token');
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('join');
+      cleanUrl.searchParams.delete('token');
+      window.history.replaceState({}, '', cleanUrl);
+      showToast('Você entrou na lista compartilhada!');
+    } catch (error) {
+      connectingUserId = null;
+      syncState = 'error';
+      render();
+      showToast(error.code === 'permission-denied'
+        ? 'Convite inválido ou expirado. Peça um novo link para quem compartilhou.'
+        : 'Não consegui aceitar o convite. Verifique sua conexão e tente novamente.');
+      return;
+    }
+  }
+
   let remote;
   try {
-    const snapshot = await getDoc(doc(db, 'shoppingLists', user.uid));
+    const snapshot = await getDoc(getActiveListRef());
     remote = snapshot.exists() ? snapshot.data() : null;
   } catch {
     connectingUserId = null;
     syncState = 'error';
     render();
-    showToast('Não consegui abrir a lista na nuvem.');
+    showToast('Não consegui abrir a lista na nuvem. Confira as regras do Firestore.');
     return;
   }
   if (!remote) {
+    if (sharedListId) {
+      connectingUserId = null;
+      syncState = 'error';
+      render();
+      showToast('A lista compartilhada não foi encontrada. Entre novamente pelo link de convite.');
+      return;
+    }
     connectingUserId = null;
     try {
       await writeCloudItems(items);
@@ -144,7 +194,7 @@ async function connectCloudUser(user) {
   connectingUserId = null;
   applyCloudItems(remote.items);
   subscribeToCloud();
-  showToast('Lista sincronizada.');
+  showToast(sharedListId ? 'Lista compartilhada sincronizada.' : 'Lista sincronizada.');
 }
 function initializeCloudAuth() {
   onAuthStateChanged(auth, user => {
@@ -172,8 +222,8 @@ function render() {
   const categoryCount = category => category === 'all' ? items.length : items.filter(item => item.category === category).length;
   const syncLabel = cloudUser ? (syncState === 'saving' ? 'Salvando...' : syncState === 'error' ? 'Falha ao sincronizar' : 'Conta conectada') : 'Entrar com Google';
   const syncDescription = cloudUser
-    ? syncState === 'error' ? 'Sem conexão com a nuvem; suas alterações continuam salvas neste aparelho.' : 'Sua lista está vinculada à sua conta e sincroniza com outros aparelhos.'
-    : 'Entre com a mesma conta Google da fila para sincronizar entre aparelhos.';
+    ? syncState === 'error' ? 'Sem conexão com a nuvem; suas alterações continuam salvas neste aparelho.' : sharedListId ? 'Lista compartilhada: as alterações aparecem para todos os participantes.' : 'Sua lista está vinculada à sua conta e sincroniza com outros aparelhos.'
+    : 'Entre com sua conta Google para sincronizar e compartilhar sua lista.';
   app.innerHTML = `
     <div class="app-shell bg-paper text-ink transition-colors duration-200">
       <header class="topbar dark:bg-[#111813]/90 dark:border-[#29352d]">
@@ -232,11 +282,69 @@ function render() {
     </div>`;
   bindEvents();
 }
+async function createOrGetInviteLink() {
+  if (!cloudUser) throw new Error('Entre com Google antes de compartilhar.');
+  let token;
+  if (sharedListId) {
+    const current = await getDoc(getActiveListRef());
+    if (!current.exists()) throw new Error('A lista compartilhada não foi encontrada.');
+    token = current.data().inviteToken;
+  } else {
+    const newListId = crypto.randomUUID();
+    const randomBytes = crypto.getRandomValues(new Uint8Array(32));
+    token = Array.from(randomBytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    await setDoc(doc(db, 'sharedShoppingLists', newListId), {
+      ownerUid: cloudUser.uid,
+      members: [cloudUser.uid],
+      inviteToken: token,
+      items: structuredClone(items),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+    sharedListId = newListId;
+    localStorage.setItem('grana-shared-list-id', sharedListId);
+    if (cloudUnsubscribe) cloudUnsubscribe();
+    cloudUnsubscribe = null;
+    connectingUserId = null;
+    await connectCloudUser(cloudUser);
+  }
+  if (!token) throw new Error('Não foi possível obter o código do convite.');
+  const inviteUrl = new URL(window.location.href);
+  inviteUrl.search = '';
+  inviteUrl.hash = '';
+  inviteUrl.searchParams.set('join', sharedListId);
+  inviteUrl.searchParams.set('token', token);
+  return inviteUrl.toString();
+}
+async function showShareModal() {
+  const root = document.querySelector('#modal-root');
+  root.innerHTML = '<div class="modal-backdrop"><section class="modal-card rounded-[22px] bg-white p-5 shadow-2xl dark:bg-[#1b241e]"><p class="text-[13px] text-stone-500">Gerando convite seguro...</p></section></div>';
+  try {
+    const inviteUrl = await createOrGetInviteLink();
+    root.innerHTML = `<div class="modal-backdrop" data-account-backdrop><section class="modal-card rounded-[22px] bg-white p-5 shadow-2xl sm:p-6 dark:bg-[#1b241e]" role="dialog" aria-modal="true" aria-labelledby="share-title"><div class="mb-4 flex items-start justify-between"><div><span class="mb-2 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#eaf2e9] text-leaf dark:bg-[#263a2e] dark:text-[#a8d1b2]">${icon('cloud', 18)}</span><h2 id="share-title" class="text-[20px] font-extrabold">Compartilhar lista</h2></div><button data-account-close class="grid h-9 w-9 place-items-center rounded-xl text-stone-400 hover:bg-stone-100 dark:hover:bg-[#2a352d]" aria-label="Fechar">${icon('close', 18)}</button></div><p class="text-[12px] leading-relaxed text-stone-500">Envie este link para sua esposa. Ela entra com a própria conta Google e a lista será compartilhada em tempo real.</p><input id="invite-link" class="input-field mt-4 !text-[11px]" readonly value="${escapeHtml(inviteUrl)}" /><button id="copy-invite" class="mt-3 w-full rounded-xl bg-leaf px-4 py-3 text-[12px] font-bold text-white">Copiar link de convite</button><p class="mt-3 text-[10px] leading-relaxed text-stone-400">Quem tiver este link poderá entrar na lista. Compartilhe apenas com pessoas de confiança.</p></section></div>`;
+    bindAccountModalClose(root);
+    root.querySelector('#copy-invite').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(inviteUrl);
+        root.querySelector('#copy-invite').textContent = 'Link copiado!';
+      } catch {
+        const input = root.querySelector('#invite-link');
+        input.select();
+        document.execCommand('copy');
+        root.querySelector('#copy-invite').textContent = 'Link copiado!';
+      }
+    });
+  } catch (error) {
+    root.innerHTML = '';
+    showToast(error.message || 'Não consegui gerar o convite.');
+  }
+}
 function showAccountModal() {
   const root = document.querySelector('#modal-root');
   if (cloudUser) {
-    root.innerHTML = `<div class="modal-backdrop" data-account-backdrop><section class="modal-card rounded-[22px] bg-white p-5 shadow-2xl sm:p-6 dark:bg-[#1b241e]" role="dialog" aria-modal="true" aria-labelledby="account-title"><div class="mb-4 flex items-start justify-between"><div><span class="mb-2 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#eaf2e9] text-leaf dark:bg-[#263a2e] dark:text-[#a8d1b2]">${icon('cloud', 18)}</span><h2 id="account-title" class="text-[20px] font-extrabold">Conta conectada</h2></div><button data-account-close class="grid h-9 w-9 place-items-center rounded-xl text-stone-400 hover:bg-stone-100 dark:hover:bg-[#2a352d]" aria-label="Fechar">${icon('close', 18)}</button></div><p class="text-[13px] text-stone-500">${escapeHtml(cloudUser.email || '')}</p><p class="mt-1 text-[11px] text-stone-400">${syncState === 'error' ? 'A nuvem não respondeu. A lista continua salva neste aparelho.' : 'Use esta conta no computador e no celular para acessar a mesma lista.'}</p><div class="mt-5 flex gap-2"><button id="sync-retry" class="flex-1 rounded-xl bg-leaf px-3 py-3 text-[11px] font-bold text-white">Sincronizar agora</button><button id="sign-out" class="flex-1 rounded-xl border border-[#dce5dc] px-3 py-3 text-[11px] font-bold text-ink dark:border-[#38453c]">Sair neste aparelho</button></div></section></div>`;
+    root.innerHTML = `<div class="modal-backdrop" data-account-backdrop><section class="modal-card rounded-[22px] bg-white p-5 shadow-2xl sm:p-6 dark:bg-[#1b241e]" role="dialog" aria-modal="true" aria-labelledby="account-title"><div class="mb-4 flex items-start justify-between"><div><span class="mb-2 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#eaf2e9] text-leaf dark:bg-[#263a2e] dark:text-[#a8d1b2]">${icon('cloud', 18)}</span><h2 id="account-title" class="text-[20px] font-extrabold">Conta conectada</h2></div><button data-account-close class="grid h-9 w-9 place-items-center rounded-xl text-stone-400 hover:bg-stone-100 dark:hover:bg-[#2a352d]" aria-label="Fechar">${icon('close', 18)}</button></div><p class="text-[13px] text-stone-500">${escapeHtml(cloudUser.email || '')}</p><p class="mt-1 text-[11px] text-stone-400">${syncState === 'error' ? 'A nuvem não respondeu. A lista continua salva neste aparelho.' : sharedListId ? 'Você participa de uma lista compartilhada. As alterações são sincronizadas para todos.' : 'Sua lista pessoal está sincronizada. Você pode criar um link para compartilhar com outra pessoa.'}</p><div class="mt-5 grid gap-2"><button id="share-list" class="w-full rounded-xl bg-leaf px-3 py-3 text-[11px] font-bold text-white">Compartilhar lista por link</button><div class="flex gap-2"><button id="sync-retry" class="flex-1 rounded-xl border border-[#dce5dc] px-3 py-3 text-[11px] font-bold text-ink dark:border-[#38453c]">Sincronizar agora</button><button id="sign-out" class="flex-1 rounded-xl border border-[#dce5dc] px-3 py-3 text-[11px] font-bold text-ink dark:border-[#38453c]">Sair neste aparelho</button></div></div></section></div>`;
     bindAccountModalClose(root);
+    root.querySelector('#share-list').addEventListener('click', showShareModal);
     root.querySelector('#sync-retry').addEventListener('click', () => {
       root.innerHTML = '';
       if (cloudUnsubscribe) cloudUnsubscribe();
@@ -261,7 +369,7 @@ function bindAccountModalClose(root) {
 }
 function renderAuthModal(message = '') {
   const root = document.querySelector('#modal-root');
-  root.innerHTML = `<div class="modal-backdrop" data-account-backdrop><section class="modal-card rounded-[22px] bg-white p-5 shadow-2xl sm:p-6 dark:bg-[#1b241e]" role="dialog" aria-modal="true" aria-labelledby="account-title"><div class="mb-4 flex items-start justify-between"><div><span class="mb-2 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#eaf2e9] text-leaf dark:bg-[#263a2e] dark:text-[#a8d1b2]">${icon('cloud', 18)}</span><h2 id="account-title" class="text-[20px] font-extrabold">Entrar para sincronizar</h2><p class="mt-1 text-[12px] text-stone-400">Use a mesma conta Google da fila de atendimento.</p></div><button data-account-close class="grid h-9 w-9 place-items-center rounded-xl text-stone-400 hover:bg-stone-100 dark:hover:bg-[#2a352d]" aria-label="Fechar">${icon('close', 18)}</button></div><p id="auth-message" class="mb-3 min-h-4 text-[11px] text-stone-500">${escapeHtml(message)}</p><button id="google-login" class="flex w-full items-center justify-center gap-3 rounded-xl bg-leaf px-4 py-3 text-[12px] font-bold text-white"><span class="grid h-5 w-5 place-items-center rounded-full bg-white text-[13px] font-extrabold text-[#4285f4]">G</span> Continuar com Google</button><p class="mt-3 text-[10px] leading-relaxed text-stone-400">A lista será salva na sua conta Google e ficará disponível neste celular e computador.</p></section></div>`;
+  root.innerHTML = `<div class="modal-backdrop" data-account-backdrop><section class="modal-card rounded-[22px] bg-white p-5 shadow-2xl sm:p-6 dark:bg-[#1b241e]" role="dialog" aria-modal="true" aria-labelledby="account-title"><div class="mb-4 flex items-start justify-between"><div><span class="mb-2 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#eaf2e9] text-leaf dark:bg-[#263a2e] dark:text-[#a8d1b2]">${icon('cloud', 18)}</span><h2 id="account-title" class="text-[20px] font-extrabold">Entrar para sincronizar</h2><p class="mt-1 text-[12px] text-stone-400">Entre com sua conta Google. Para compartilhar, envie um convite para outra pessoa.</p></div><button data-account-close class="grid h-9 w-9 place-items-center rounded-xl text-stone-400 hover:bg-stone-100 dark:hover:bg-[#2a352d]" aria-label="Fechar">${icon('close', 18)}</button></div><p id="auth-message" class="mb-3 min-h-4 text-[11px] text-stone-500">${escapeHtml(message)}</p><button id="google-login" class="flex w-full items-center justify-center gap-3 rounded-xl bg-leaf px-4 py-3 text-[12px] font-bold text-white"><span class="grid h-5 w-5 place-items-center rounded-full bg-white text-[13px] font-extrabold text-[#4285f4]">G</span> Continuar com Google</button><p class="mt-3 text-[10px] leading-relaxed text-stone-400">Você pode usar sua conta Google e compartilhar a mesma lista com outra pessoa, cada um no seu próprio acesso.</p></section></div>`;
   bindAccountModalClose(root);
   root.querySelector('#google-login').addEventListener('click', async event => {
     const button = event.currentTarget;
