@@ -1,7 +1,7 @@
 import './style.css';
 import { auth, db } from './firebase.js';
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
-import { arrayUnion, deleteField, doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+import { arrayUnion, deleteField, doc, getDoc, onSnapshot, runTransaction, serverTimestamp, setDoc, updateDoc } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const categories = [
   { id: 'all', label: 'Todos os itens', icon: '▦', tint: 'bg-stone-100 text-stone-600' },
@@ -26,6 +26,7 @@ let items = stored ? JSON.parse(stored) : seed;
 let cloudUser = null;
 let cloudUnsubscribe = null;
 let cloudSaveTimer = null;
+let lastCloudItems = null;
 let connectingUserId = null;
 let applyingCloudData = false;
 let syncState = 'disconnected';
@@ -55,19 +56,49 @@ function save() {
   saveLocal();
   if (cloudUser && !applyingCloudData) queueCloudSave();
 }
+function mergeConcurrentItems(baseItems, localItems, remoteItems) {
+  const base = new Map((baseItems || []).map(item => [item.id, item]));
+  const local = new Map((localItems || []).map(item => [item.id, item]));
+  const merged = new Map((remoteItems || []).map(item => [item.id, item]));
+
+  // Reaplica somente as mudanças feitas localmente desde a última versão recebida.
+  for (const [id, oldItem] of base) {
+    if (!local.has(id)) merged.delete(id);
+    else if (JSON.stringify(local.get(id)) !== JSON.stringify(oldItem)) {
+      merged.set(id, local.get(id));
+    }
+  }
+  for (const [id, item] of local) {
+    if (!base.has(id) && !merged.has(id)) merged.set(id, item);
+  }
+  return [...merged.values()];
+}
 function queueCloudSave() {
   clearTimeout(cloudSaveTimer);
   syncState = 'saving';
   cloudSaveTimer = setTimeout(async () => {
+    cloudSaveTimer = null;
     if (!cloudUser) return;
-    const snapshot = structuredClone(items);
+    const baseItems = structuredClone(lastCloudItems || []);
+    const localItems = structuredClone(items);
     try {
-      if (sharedListId) {
-        await updateDoc(getActiveListRef(), { items: snapshot, updatedAt: serverTimestamp() });
-      } else {
-        await setDoc(getActiveListRef(), { items: snapshot, updatedAt: serverTimestamp() });
+      const ref = getActiveListRef();
+      const savedItems = await runTransaction(db, async transaction => {
+        const current = await transaction.get(ref);
+        const remoteItems = current.exists() && Array.isArray(current.data().items)
+          ? current.data().items
+          : [];
+        const merged = mergeConcurrentItems(baseItems, localItems, remoteItems);
+        transaction.set(ref, { items: merged, updatedAt: serverTimestamp() }, { merge: true });
+        return merged;
+      });
+      lastCloudItems = structuredClone(savedItems);
+      // Não substitui uma edição mais recente feita enquanto a gravação estava em andamento.
+      if (JSON.stringify(items) === JSON.stringify(localItems)) {
+        applyCloudItems(savedItems);
       }
-    } catch {
+    } catch (error) {
+      console.error('Falha ao sincronizar lista:', error);
       syncState = 'error';
       render();
       showToast('Salva neste aparelho; não foi possível sincronizar agora.');
@@ -75,11 +106,12 @@ function queueCloudSave() {
     }
     syncState = 'synced';
     render();
-  }, 350);
+  }, 250);
 }
 function applyCloudItems(nextItems) {
   applyingCloudData = true;
   items = Array.isArray(nextItems) ? nextItems : [];
+  lastCloudItems = structuredClone(items);
   saveLocal();
   applyingCloudData = false;
   syncState = 'synced';
@@ -88,15 +120,26 @@ function applyCloudItems(nextItems) {
 function subscribeToCloud() {
   if (cloudUnsubscribe) cloudUnsubscribe();
   cloudUnsubscribe = onSnapshot(getActiveListRef(), snapshot => {
-      const incoming = snapshot.data()?.items;
-      if (Array.isArray(incoming) && JSON.stringify(incoming) !== JSON.stringify(items)) {
-        applyCloudItems(incoming);
-        showToast('Lista atualizada pelo outro aparelho.');
-      }
-    }, () => {
-      syncState = 'error';
-      render();
-    });
+    const incoming = snapshot.data()?.items;
+    if (!Array.isArray(incoming)) return;
+
+    const hasPendingLocalChanges = cloudSaveTimer !== null;
+    const nextItems = hasPendingLocalChanges
+      ? mergeConcurrentItems(lastCloudItems || [], items, incoming)
+      : incoming;
+
+    lastCloudItems = structuredClone(incoming);
+    if (JSON.stringify(nextItems) !== JSON.stringify(items)) {
+      applyCloudItems(nextItems);
+      // Se havia alterações locais aguardando gravação, preserva-as e grava o resultado mesclado.
+      if (hasPendingLocalChanges) queueCloudSave();
+      else showToast('Lista atualizada pelo outro aparelho.');
+    }
+  }, error => {
+    console.error('Listener da lista compartilhada:', error);
+    syncState = 'error';
+    render();
+  });
 }
 async function writeCloudItems(nextItems) {
   if (sharedListId) {
