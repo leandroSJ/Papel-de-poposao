@@ -1,6 +1,6 @@
 import './style.css';
 import { auth, db } from './firebase.js';
-import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { GoogleAuthProvider, browserLocalPersistence, getRedirectResult, onAuthStateChanged, setPersistence, signInWithPopup, signInWithRedirect, signOut } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { arrayUnion, deleteField, doc, getDoc, onSnapshot, runTransaction, serverTimestamp, setDoc, updateDoc } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const categories = [
@@ -247,7 +247,18 @@ async function connectCloudUser(user) {
   subscribeToCloud();
   showToast(sharedListId ? 'Lista compartilhada sincronizada.' : 'Lista sincronizada.');
 }
-function initializeCloudAuth() {
+async function initializeCloudAuth() {
+  // Conclui explicitamente o fluxo OAuth iniciado por signInWithRedirect no celular.
+  try {
+    const redirectResult = await getRedirectResult(auth);
+    if (redirectResult?.user) {
+      console.info('Login Google por redirecionamento concluído:', redirectResult.user.uid);
+    }
+  } catch (error) {
+    console.error('Erro ao concluir login Google por redirecionamento:', error);
+    renderAuthModal(`Não foi possível concluir o login Google (${error.code || 'erro desconhecido'}). Tente novamente e, se persistir, informe esse código ao suporte.`);
+  }
+
   onAuthStateChanged(auth, user => {
     if (user) {
       setTimeout(() => connectCloudUser(user), 0);
@@ -429,6 +440,7 @@ function renderAuthModal(message = '') {
     button.textContent = 'Conectando...';
     try {
       const provider = new GoogleAuthProvider();
+      await setPersistence(auth, browserLocalPersistence);
       if (window.matchMedia('(max-width: 767px)').matches) {
         await signInWithRedirect(auth, provider);
       } else {
