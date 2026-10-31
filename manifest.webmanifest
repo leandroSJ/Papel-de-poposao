@@ -1,0 +1,31 @@
+{
+  "id": "./",
+  "name": "Grana — Lista de compras",
+  "short_name": "Grana",
+  "description": "Organize suas compras, acompanhe os preços e compartilhe sua lista.",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "portrait-primary",
+  "background_color": "#f7f8f5",
+  "theme_color": "#215c3d",
+  "icons": [
+    {
+      "src": "./icons/grana.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/grana.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
