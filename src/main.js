@@ -140,6 +140,7 @@ async function connectCloudUser(user) {
       await updateDoc(inviteRef, { joinProof: deleteField() });
       sharedListId = inviteListId;
       localStorage.setItem(`grana-shared-list-id-${user.uid}`, sharedListId);
+      localStorage.setItem(`grana-shared-list-initialized-${user.uid}`, '1');
       inviteParams.delete('join');
       inviteParams.delete('token');
       const cleanUrl = new URL(window.location.href);
@@ -190,13 +191,15 @@ async function connectCloudUser(user) {
   }
   const currentLocal = localStorage.getItem('grana-shopping-items');
   const localItems = currentLocal ? JSON.parse(currentLocal) : null;
-  if (localItems && JSON.stringify(localItems) !== JSON.stringify(remote.items)) {
+  const justJoinedSharedList = localStorage.getItem(`grana-shared-list-initialized-${user.uid}`) === '1';
+  if (!justJoinedSharedList && localItems && JSON.stringify(localItems) !== JSON.stringify(remote.items)) {
     connectingUserId = null;
     showSyncConflict(remote.items, localItems);
     return;
   }
   connectingUserId = null;
   applyCloudItems(remote.items);
+  localStorage.removeItem(`grana-shared-list-initialized-${user.uid}`);
   subscribeToCloud();
   showToast(sharedListId ? 'Lista compartilhada sincronizada.' : 'Lista sincronizada.');
 }
