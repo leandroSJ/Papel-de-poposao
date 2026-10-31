@@ -528,3 +528,13 @@ window.addEventListener('online', () => {
   connectingUserId = null;
   connectCloudUser(cloudUser);
 });
+
+// Registra o Service Worker para permitir a instalação como PWA no Android.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    const appBase = new URL(import.meta.env.BASE_URL, window.location.href);
+    const workerUrl = new URL('sw.js', appBase);
+    navigator.serviceWorker.register(workerUrl, { scope: appBase.pathname })
+      .catch(error => console.error('Não foi possível registrar o app offline:', error));
+  });
+}
