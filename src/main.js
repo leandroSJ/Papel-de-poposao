@@ -131,7 +131,8 @@ function subscribeToCloud() {
     lastCloudItems = structuredClone(incoming);
     if (JSON.stringify(nextItems) !== JSON.stringify(items)) {
       applyCloudItems(nextItems);
-      // Se havia alterações locais aguardando gravação, preserva-as e grava o resultado mesclado.
+      // A base da mesclagem deve continuar sendo a versão remota, sem as mudanças locais pendentes.
+      lastCloudItems = structuredClone(incoming);
       if (hasPendingLocalChanges) queueCloudSave();
       else showToast('Lista atualizada pelo outro aparelho.');
     }
