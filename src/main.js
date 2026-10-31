@@ -29,7 +29,7 @@ let cloudSaveTimer = null;
 let connectingUserId = null;
 let applyingCloudData = false;
 let syncState = 'disconnected';
-let sharedListId = localStorage.getItem('grana-shared-list-id') || null;
+let sharedListId = null;
 const inviteParams = new URLSearchParams(window.location.search);
 let selectedCategory = 'all';
 let searchQuery = '';
@@ -121,7 +121,11 @@ function mergeLists(cloudItems, localItems) {
   return merged;
 }
 async function connectCloudUser(user) {
-  if (!user || cloudUser?.uid === user.uid && (cloudUnsubscribe || connectingUserId === user.uid)) return;
+  if (!user) return;
+  if (cloudUser?.uid !== user.uid) {
+    sharedListId = localStorage.getItem(`grana-shared-list-id-${user.uid}`) || null;
+  }
+  if (cloudUser?.uid === user.uid && (cloudUnsubscribe || connectingUserId === user.uid)) return;
   cloudUser = user;
   connectingUserId = user.uid;
   syncState = 'loading';
@@ -135,7 +139,7 @@ async function connectCloudUser(user) {
       await updateDoc(inviteRef, { members: arrayUnion(user.uid), joinProof: inviteToken });
       await updateDoc(inviteRef, { joinProof: deleteField() });
       sharedListId = inviteListId;
-      localStorage.setItem('grana-shared-list-id', sharedListId);
+      localStorage.setItem(`grana-shared-list-id-${user.uid}`, sharedListId);
       inviteParams.delete('join');
       inviteParams.delete('token');
       const cleanUrl = new URL(window.location.href);
@@ -203,6 +207,7 @@ function initializeCloudAuth() {
     } else if (cloudUser) {
       if (cloudUnsubscribe) cloudUnsubscribe();
       cloudUser = null;
+      sharedListId = null;
       cloudUnsubscribe = null;
       syncState = 'disconnected';
       render();
@@ -302,7 +307,7 @@ async function createOrGetInviteLink() {
       updatedAt: serverTimestamp()
     });
     sharedListId = newListId;
-    localStorage.setItem('grana-shared-list-id', sharedListId);
+    localStorage.setItem(`grana-shared-list-id-${cloudUser.uid}`, sharedListId);
     if (cloudUnsubscribe) cloudUnsubscribe();
     cloudUnsubscribe = null;
     connectingUserId = null;
