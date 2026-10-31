@@ -443,12 +443,11 @@ function renderAuthModal(message = '') {
       // Sempre permite escolher outra conta Google no dispositivo convidado.
       provider.setCustomParameters({ prompt: 'select_account' });
       await setPersistence(auth, browserLocalPersistence);
-      if (window.matchMedia('(max-width: 767px)').matches) {
-        await signInWithRedirect(auth, provider);
-      } else {
-        await signInWithPopup(auth, provider);
-        root.innerHTML = '';
-      }
+      // O redirecionamento pode perder o estado OAuth em navegadores móveis
+      // quando o authDomain do Firebase é diferente do domínio do GitHub Pages.
+      // O popup mantém o fluxo na mesma sessão e evita o ciclo de retorno sem login.
+      await signInWithPopup(auth, provider);
+      root.innerHTML = '';
     } catch (error) {
       const message = error.code === 'auth/unauthorized-domain'
         ? 'Este endereço precisa ser autorizado em Firebase > Authentication > Settings > Authorized domains.'
